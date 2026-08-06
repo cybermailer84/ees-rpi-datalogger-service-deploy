@@ -109,6 +109,48 @@ for f in "${FILES[@]}"; do
   fi
 done
 
+
+# --- Laeuft dieses Binary auf diesem Geraet ueberhaupt? ---------------------
+#
+# Ein auf neuerem Betriebssystem gebautes Binary verlangt eine neuere glibc.
+# Die laesst sich nicht nachinstallieren, und die Vertraeglichkeit geht nur in
+# eine Richtung: alt gebaut laeuft auf neu, nie umgekehrt. Ohne diese Pruefung
+# wird ein laufender Dienst durch einen ersetzt, der nicht startet.
+#
+# Bewusst nur mit grep und sort statt readelf: binutils ist auf einem Geraet
+# nicht vorausgesetzt. Die benoetigten Fassungen stehen als Zeichenketten im
+# Binary, das Ergebnis stimmt mit readelf ueberein.
+benoetigte_glibc() {
+    grep -ao 'GLIBC_[0-9]\+\.[0-9]\+' "$1" 2>/dev/null \
+        | sed 's/GLIBC_//' | sort -uV | tail -1
+}
+
+glibc_reicht() { # $1 Binary; setzt GLIBC_NOETIG und GLIBC_LOKAL
+    GLIBC_NOETIG="$(benoetigte_glibc "$1")"
+    GLIBC_LOKAL="$(ldd --version 2>/dev/null | head -1 | grep -o '[0-9]\+\.[0-9]\+$')"
+
+    # Statisch gebunden oder nicht ermittelbar - dann nicht im Weg stehen.
+    [[ -n "$GLIBC_NOETIG" && -n "$GLIBC_LOKAL" ]] || return 0
+
+    [[ "$(printf '%s\n%s\n' "$GLIBC_NOETIG" "$GLIBC_LOKAL" | sort -V | tail -1)" == "$GLIBC_LOKAL" ]]
+}
+
+# Erst pruefen, dann ersetzen. Genau hier wurde am 6.8.2026 ein
+# funktionierendes Binary durch eines ersetzt, das nicht startet - und dieses
+# Script legt keine Sicherung an, es gab also keinen Weg zurueck.
+for f in "${FILES[@]}"; do
+  if ! glibc_reicht "$WORKDIR/$f.new"; then
+    echo "FEHLER: $f braucht glibc $GLIBC_NOETIG, dieses Geraet hat $GLIBC_LOKAL." >&2
+    echo "  Das Binary wurde auf einem neueren Betriebssystem gebaut. glibc laesst" >&2
+    echo "  sich nicht nachinstallieren - das Release muss auf einem Geraet gebaut" >&2
+    echo "  werden, das hoechstens so neu ist wie dieses hier." >&2
+    echo "  Die vorhandenen Dateien wurden NICHT ersetzt." >&2
+    cleanup_fail
+    exit 1
+  fi
+done
+echo "Vertraeglichkeit geprueft: braucht glibc $GLIBC_NOETIG, vorhanden $GLIBC_LOKAL."
+
 # --- alle Downloads erfolgreich -> in Position bringen ---
 for f in "${FILES[@]}"; do
   mv -f "$WORKDIR/$f.new" "$WORKDIR/$f"

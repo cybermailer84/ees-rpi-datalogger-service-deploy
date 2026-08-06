@@ -348,7 +348,42 @@ DOWNLOADED_VERSION="$(read_version "$TMP_DIR/app-service")"
 [[ "$DOWNLOADED_VERSION" == "$TARGET_VERSION" ]] \
     || fail "Geladenes Binary meldet '$DOWNLOADED_VERSION', erwartet war '$TARGET_VERSION'. Release verworfen."
 
+
+# --- Laeuft dieses Binary auf diesem Geraet ueberhaupt? ---------------------
+#
+# Ein auf neuerem Betriebssystem gebautes Binary verlangt eine neuere glibc.
+# Die laesst sich nicht nachinstallieren, und die Vertraeglichkeit geht nur in
+# eine Richtung: alt gebaut laeuft auf neu, nie umgekehrt. Ohne diese Pruefung
+# wird ein laufender Dienst durch einen ersetzt, der nicht startet.
+#
+# Bewusst nur mit grep und sort statt readelf: binutils ist auf einem Geraet
+# nicht vorausgesetzt. Die benoetigten Fassungen stehen als Zeichenketten im
+# Binary, das Ergebnis stimmt mit readelf ueberein.
+benoetigte_glibc() {
+    grep -ao 'GLIBC_[0-9]\+\.[0-9]\+' "$1" 2>/dev/null \
+        | sed 's/GLIBC_//' | sort -uV | tail -1
+}
+
+glibc_reicht() { # $1 Binary; setzt GLIBC_NOETIG und GLIBC_LOKAL
+    GLIBC_NOETIG="$(benoetigte_glibc "$1")"
+    GLIBC_LOKAL="$(ldd --version 2>/dev/null | head -1 | grep -o '[0-9]\+\.[0-9]\+$')"
+
+    # Statisch gebunden oder nicht ermittelbar - dann nicht im Weg stehen.
+    [[ -n "$GLIBC_NOETIG" && -n "$GLIBC_LOKAL" ]] || return 0
+
+    [[ "$(printf '%s\n%s\n' "$GLIBC_NOETIG" "$GLIBC_LOKAL" | sort -V | tail -1)" == "$GLIBC_LOKAL" ]]
+}
+
+for b in "${BINARIES[@]}"; do
+    glibc_reicht "$TMP_DIR/$b" || fail "$b braucht glibc $GLIBC_NOETIG, dieses Geraet hat $GLIBC_LOKAL.
+  Das Binary wurde auf einem neueren Betriebssystem gebaut. glibc laesst sich
+  nicht nachinstallieren - das Release muss auf einem Geraet gebaut werden, das
+  hoechstens so neu ist wie dieses hier.
+  Der Dienst wurde nicht angetastet und laeuft unveraendert weiter."
+done
+
 log "Signatur, Pruefsummen und Version geprueft."
+log "Vertraeglichkeit geprueft: braucht glibc $GLIBC_NOETIG, vorhanden $GLIBC_LOKAL."
 
 if $DRY_RUN; then
     [[ -f "$TMP_DIR/$POSTINSTALL" ]] \
