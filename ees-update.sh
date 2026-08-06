@@ -141,8 +141,21 @@ if [[ -z "$CONFIG" ]]; then
     CONFIG="$(read_config_sqlite || true)"
     CONFIG_SOURCE="Datenbank"
 fi
-[[ -n "$CONFIG" ]] || die "Konfiguration nicht lesbar - weder ueber
-  http://127.0.0.1:$SERVICE_PORT/config noch aus $WORKDIR/app-service-database.sqlite."
+if [[ -z "$CONFIG" ]]; then
+    # Fehlt beides, hat der Dienst hier vermutlich noch nie gelaufen - die
+    # Datenbank legt er beim ersten Start selbst an. Das ist die eigentliche
+    # Ursache, und ohne diesen Hinweis sucht man an der falschen Stelle.
+    hinweis=""
+    if [[ ! -e "$WORKDIR/app-service-database.sqlite" ]]; then
+        hinweis="
+  Die Datenbank existiert gar nicht. Der app-service legt sie beim ersten
+  erfolgreichen Start an - er ist hier also vermutlich noch nie gelaufen.
+  Nachsehen mit:  systemctl status $APP_UNIT ; journalctl -u $APP_UNIT -n 30
+  Haeufigste Ursache ist eine fehlende Bibliothek:  ldd $WORKDIR/app-service | grep 'not found'"
+    fi
+    die "Konfiguration nicht lesbar - weder ueber
+  http://127.0.0.1:$SERVICE_PORT/config noch aus $WORKDIR/app-service-database.sqlite.$hinweis"
+fi
 
 SENSOR_ID="$(sed -n 1p <<<"$CONFIG")"
 HARDWARE_VARIANT="$(sed -n 2p <<<"$CONFIG")"

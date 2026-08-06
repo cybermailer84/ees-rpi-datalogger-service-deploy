@@ -144,8 +144,63 @@ for _ in $(seq 40); do
     fi
     sleep 1
 done
-$healthy || die "Der app-service antwortet nicht auf Port $SERVICE_PORT.
-  Nachsehen mit:  systemctl status $APP_UNIT ; journalctl -u $APP_UNIT -n 50"
+# Kommt der Dienst nicht hoch, ist die haeufigste Ursache eine Bibliothek, die
+# auf dem Build-Rechner vorhanden war und auf diesem Geraet fehlt. Das gleich
+# hier zeigen, statt den Benutzer erst durch journalctl schicken zu muessen -
+# die eigentliche Meldung steht sonst drei Schritte weiter hinten.
+if ! $healthy; then
+    echo
+    echo "--- Der Dienst kam nicht hoch. Was das Geraet dazu sagt: -------------"
+
+    echo
+    echo "Fehlende Bibliotheken (ldd):"
+    if command -v ldd >/dev/null; then
+        fehlende="$(ldd "$WORKDIR/app-service" 2>/dev/null | grep -i 'not found' || true)"
+        if [[ -n "$fehlende" ]]; then
+            sed 's/^/  /' <<<"$fehlende"
+            echo
+            echo "  Das Binary wurde auf einem Rechner gebaut, auf dem es diese"
+            echo "  Bibliotheken gibt - auf diesem Geraet fehlen sie. Entweder hier"
+            echo "  nachinstallieren, oder auf einem Geraet bauen, das dem hier"
+            echo "  entspricht (gleiche Betriebssystemfassung)."
+        else
+            echo "  keine - daran liegt es nicht."
+        fi
+    else
+        echo "  ldd nicht vorhanden."
+    fi
+
+    echo
+    echo "Direkter Startversuch:"
+    # In einem Wegwerf-Verzeichnis und als Zielbenutzer, nicht als root: Kommt
+    # das Binary weit genug, legt es eine Datenbank an - die gehoerte sonst
+    # root und waere fuer den eigentlichen Dienst nicht mehr beschreibbar.
+    # Mit Zeitgrenze, weil ein erfolgreicher Start nicht von selbst endet.
+    probe_dir="$(mktemp -d)"
+    chown "$TARGET_USER":"$TARGET_USER" "$probe_dir" 2>/dev/null || true
+    if command -v setpriv >/dev/null; then
+        probe_cmd=(setpriv --reuid="$TARGET_USER" --regid="$TARGET_USER" --clear-groups)
+    elif command -v runuser >/dev/null; then
+        probe_cmd=(runuser -u "$TARGET_USER" --)
+    else
+        probe_cmd=()   # dann eben als root - die Zeitgrenze und das
+                       # Wegwerf-Verzeichnis begrenzen den Schaden trotzdem
+    fi
+    ( cd "$probe_dir" && timeout 5 ${probe_cmd[@]+"${probe_cmd[@]}"} \
+        "$WORKDIR/app-service" --service-port 0 ) 2>&1 \
+        | head -5 | sed 's/^/  /' || true
+    rm -rf "$probe_dir"
+
+    echo
+    echo "Letzte Zeilen aus dem Journal:"
+    journalctl -u "$APP_UNIT" -n 15 --no-pager 2>/dev/null | sed 's/^/  /' || true
+    echo "----------------------------------------------------------------------"
+    echo
+
+    die "Der app-service antwortet nicht auf Port $SERVICE_PORT - siehe oben.
+  Die Hardware-Variante wurde noch nicht gesetzt. Nach der Behebung dieses
+  Script einfach erneut aufrufen, es ist wiederholbar."
+fi
 
 # Die Konfiguration wird als Ganzes ersetzt - also erst lesen, ergaenzen,
 # zurueckschreiben. Nur das eine Feld zu senden wuerde alles andere loeschen.
