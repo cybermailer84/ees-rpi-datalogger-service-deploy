@@ -43,6 +43,11 @@ BINARIES=(app-service app-tui)
 POSTINSTALL="postinstall.sh"
 POSTINSTALL_TIMEOUT="${EES_POSTINSTALL_TIMEOUT:-300}"
 
+# Sicherung der Geraetekonfiguration vor jedem Update. Unter /var/lib, nicht im
+# Arbeitsverzeichnis: Dort liegen die Dateien, die ein Update austauscht.
+CONFIG_BACKUP_DIR="${EES_CONFIG_BACKUP_DIR:-/var/lib/ees/config}"
+CONFIG_BACKUP_KEEP="${EES_CONFIG_BACKUP_KEEP:-10}"
+
 UPDATE_ROOT="${EES_UPDATE_ROOT:-https://ees.itc-haas.at/update/BACKUP/services}"
 KEY_DIR="${EES_KEY_DIR:-/etc/ees/keys}"
 SERVICE_PORT="${EES_SERVICE_PORT:-8000}"
@@ -109,9 +114,14 @@ fi
 # Zuerst ueber den laufenden Dienst - das ist der Stand, den er tatsaechlich
 # fuehrt. Faellt er aus, direkt aus seiner Datenbank: gerade dann willst du ein
 # Update ausspielen koennen, und ein toter Dienst darf das nicht verhindern.
-read_config_http() {
-    local body
-    body="$(curl -fsS --max-time 10 "http://127.0.0.1:$SERVICE_PORT/config" 2>/dev/null)" || return 1
+# Die vollstaendige Konfiguration, wie die app-tui sie als data_logger.config
+# exportiert. Bewusst hier oben und nicht in einer Funktion geholt: In einer
+# Kommandoersetzung - CONFIG="$(...)" - liefe die Zuweisung in einer Subshell
+# und waere danach wieder leer.
+RAW_CONFIG="$(curl -fsS --max-time 10 "http://127.0.0.1:$SERVICE_PORT/config" 2>/dev/null || true)"
+
+parse_config() {   # wertet RAW_CONFIG aus
+    [[ -n "$RAW_CONFIG" ]] || return 1
     python3 -c '
 import json, sys
 c = json.load(sys.stdin)
@@ -120,7 +130,7 @@ if not c:
 print(c.get("piDataLoggerId") or "")
 print(c.get("hardwareVariant") or "")
 print(c.get("heartbeatUrl") or "")
-' <<<"$body" 2>/dev/null || return 1
+' <<<"$RAW_CONFIG" 2>/dev/null || return 1
 }
 
 read_config_sqlite() {
@@ -134,9 +144,10 @@ read_config_sqlite() {
          FROM config ORDER BY id LIMIT 1;" 2>/dev/null
 }
 
-CONFIG="$(read_config_http || true)"
+CONFIG="$(parse_config || true)"
 CONFIG_SOURCE="Dienst"
 if [[ -z "$CONFIG" ]]; then
+    RAW_CONFIG=""      # unbrauchbar - keine Sicherung daraus schreiben
     log "Dienst nicht erreichbar - lese die Konfiguration aus der Datenbank."
     CONFIG="$(read_config_sqlite || true)"
     CONFIG_SOURCE="Datenbank"
@@ -163,8 +174,9 @@ HEARTBEAT_URL="$(sed -n 3p <<<"$CONFIG")"
 
 [[ -n "$SENSOR_ID" ]] || die "Keine pi_data_logger_id in der Konfiguration."
 [[ -n "$HARDWARE_VARIANT" ]] || die "Keine Hardware-Variante in der Konfiguration.
-  Einmalig in der App-TUI unter Konfiguration setzen (z.B. v1.9) - ohne sie ist
-  nicht bestimmbar, welche Binaries fuer dieses Geraet gelten."
+  Ohne sie ist nicht bestimmbar, welche Binaries fuer dieses Geraet gelten.
+  Setzen ueber den Konfigurations-Endpunkt (die app-tui zeigt sie nur an):
+    sudo $WORKDIR/ees-onboard.sh -w v1.9"
 [[ -n "$HEARTBEAT_URL" ]] || die "Keine heartbeat_url in der Konfiguration."
 
 # Die Update-Endpunkte liegen neben dem Heartbeat. Sie daraus abzuleiten statt
@@ -236,6 +248,64 @@ if [[ -r "$FAIL_MARKER" ]] && ! $FORCE; then
         exit 0
     fi
 fi
+
+# --- Konfiguration sichern --------------------------------------------------
+#
+# Vor jedem Update-Versuch, und zwar bevor irgendetwas geladen oder angefasst
+# wird. Inhaltlich dasselbe, was die app-tui als data_logger.config exportiert -
+# damit laesst sich ein Geraet notfalls von Hand wieder herrichten.
+#
+# Nicht bei jedem Lauf: Der Timer schaut alle 15 Minuten nach, das gaebe 96
+# gleiche Dateien am Tag. Nur wenn wirklich aktualisiert wird.
+sichere_konfiguration() {
+    if [[ -z "$RAW_CONFIG" ]]; then
+        # Kam die Konfiguration aus der Datenbank, liegen nur die drei Felder
+        # vor, die der Updater braucht - kein vollstaendiger Export. Dann lieber
+        # nichts schreiben, als eine aeltere vollstaendige Sicherung durch eine
+        # unvollstaendige zu ersetzen.
+        log "WARNUNG: Kein vollstaendiger Konfigurationsexport moeglich (Quelle: $CONFIG_SOURCE)."
+        log "  Vorhandene Sicherungen unter $CONFIG_BACKUP_DIR bleiben unveraendert."
+        return 0
+    fi
+
+    mkdir -p "$CONFIG_BACKUP_DIR" || { log "WARNUNG: $CONFIG_BACKUP_DIR nicht anlegbar."; return 0; }
+
+    local zeit ziel
+    zeit="$(date '+%Y%m%d-%H%M%S')"
+    ziel="$CONFIG_BACKUP_DIR/data_logger-$zeit.config"
+
+    # Erst pruefen und formatieren, dann schreiben. Eine halb geschriebene oder
+    # ungueltige Sicherung waere schlimmer als keine - man verlaesst sich im
+    # Ernstfall darauf.
+    if ! python3 -c '
+import json, sys
+cfg = json.load(sys.stdin)
+if not cfg:
+    sys.exit(1)
+sys.stdout.write(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
+' <<<"$RAW_CONFIG" > "$ziel.neu" 2>/dev/null; then
+        rm -f "$ziel.neu"
+        log "WARNUNG: Konfiguration nicht auswertbar - keine Sicherung geschrieben."
+        return 0
+    fi
+
+    chmod 600 "$ziel.neu"
+    mv -f "$ziel.neu" "$ziel"
+    # Stabiler Name fuer den Ernstfall: den sucht niemand unter Zeitstempeln.
+    cp -p "$ziel" "$CONFIG_BACKUP_DIR/data_logger.config"
+
+    log "Konfiguration gesichert: $ziel ($(stat -c %s "$ziel") Bytes)"
+
+    # Alte Staende begrenzen - eine SD-Karte ist klein.
+    local ueberzaehlig
+    ueberzaehlig="$(ls -1t "$CONFIG_BACKUP_DIR"/data_logger-*.config 2>/dev/null | tail -n +$(( CONFIG_BACKUP_KEEP + 1 )))"
+    if [[ -n "$ueberzaehlig" ]]; then
+        xargs -r rm -f <<<"$ueberzaehlig"
+        log "  aeltere Staende entfernt, $CONFIG_BACKUP_KEEP behalten."
+    fi
+}
+
+$DRY_RUN || sichere_konfiguration
 
 # --- Herunterladen ----------------------------------------------------------
 
