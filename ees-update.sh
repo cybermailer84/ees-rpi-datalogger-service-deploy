@@ -179,7 +179,12 @@ HEARTBEAT_URL="$(sed -n 3p <<<"$CONFIG")"
 [[ -n "$SENSOR_ID" ]] || die "Keine pi_data_logger_id in der Konfiguration."
 [[ -n "$HARDWARE_VARIANT" ]] || die "Keine Hardware-Variante in der Konfiguration.
   Ohne sie ist nicht bestimmbar, welche Binaries fuer dieses Geraet gelten.
-  Setzen ueber den Konfigurations-Endpunkt (die app-tui zeigt sie nur an):
+  Die app-tui zeigt sie nur an, eingeben laesst sie sich dort nicht.
+
+  Dieses Geraet laeuft bereits - nur die Variante nachtragen:
+    sudo $WORKDIR/ees-set-variant.sh -w v1.9 -u
+
+  Fabrikneues Geraet, noch nie eingerichtet (Binaries, Units, Schluessel):
     sudo $WORKDIR/ees-onboard.sh -w v1.9"
 [[ -n "$HEARTBEAT_URL" ]] || die "Keine heartbeat_url in der Konfiguration."
 

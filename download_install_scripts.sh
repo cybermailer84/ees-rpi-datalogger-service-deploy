@@ -8,8 +8,8 @@
 # download_install_scripts.sh — holt die Deploy-Skripte direkt von GitHub.
 #
 # Lädt install-services.sh, install-testadapter.sh, install-update.sh,
-# ees-update.sh und ees-onboard.sh nach ~/WORK/datalogger und macht sie
-# ausführbar (chmod a+x).
+# ees-update.sh, ees-onboard.sh und ees-set-variant.sh nach ~/WORK/datalogger
+# und macht sie ausführbar (chmod a+x).
 #
 # Danach richtet ees-onboard.sh das Gerät in einem Aufruf fertig ein — §9.15.
 #
@@ -41,7 +41,7 @@ GITHUB_BRANCH="main"
 GITHUB_RAW="https://raw.githubusercontent.com/$GITHUB_OWNER/$GITHUB_REPO/$GITHUB_BRANCH"
 UPDATE_SERVER="${EES_UPDATE_SERVER:-https://ees.itc-haas.at/update/BACKUP/services/bootstrap}"
 
-SCRIPTS=(install-services.sh install-testadapter.sh install-update.sh ees-update.sh ees-onboard.sh)
+SCRIPTS=(install-services.sh install-testadapter.sh install-update.sh ees-update.sh ees-onboard.sh ees-set-variant.sh)
 KEYS=(release-key.pub)
 
 command -v curl >/dev/null || { echo "curl ist nicht installiert." >&2; exit 1; }
