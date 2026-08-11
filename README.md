@@ -21,7 +21,9 @@ dort hinterlegten Sollstand selbst.
 | Datei | Zweck |
 |---|---|
 | `download_install_scripts.sh` | holt die übrigen Skripte und den öffentlichen Schlüssel |
-| `ees-onboard.sh` | richtet ein Gerät in einem Aufruf ein |
+| `ees-onboard.sh` | richtet ein **fabrikneues** Gerät in einem Aufruf ein |
+| `ees-doctor.sh` | nimmt den Zustand eines **laufenden** Geräts auf und ergänzt, was fehlt |
+| `ees-set-variant.sh` | trägt die Hardware-Variante nach, ohne Binaries anzufassen |
 | `install-services.sh` | systemd-Units, Schlüssel, Updater |
 | `install-update.sh` | Binaries von Hand aktualisieren |
 | `ees-update.sh` | automatisches Update, per Timer |
