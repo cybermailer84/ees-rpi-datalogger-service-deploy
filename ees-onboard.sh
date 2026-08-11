@@ -39,6 +39,11 @@ SERVICE_PORT="${SERVICE_PORT:-8000}"
 DRY_RUN=false
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Die Werksvorgabe aus dtos::AppServiceConfigDto::default(). Steht sie als
+# Geraetekennung da, hat der Dienst seine Konfiguration nicht lesen koennen -
+# ein Zurueckschreiben wuerde den Verlust festschreiben.
+WERKSVORGABE="rpi_bi_gs27_schule"
+
 APP_UNIT="ees-app-service.service"
 UPD_TIMER="ees-update.timer"
 HC_TIMER="ees-healthcheck.timer"
@@ -206,6 +211,27 @@ fi
 # zurueckschreiben. Nur das eine Feld zu senden wuerde alles andere loeschen.
 config="$(curl -fsS --max-time 10 "http://127.0.0.1:$SERVICE_PORT/config/" 2>/dev/null)" \
     || die "Konfiguration nicht lesbar."
+
+kennung="$(python3 -c '
+import json, sys
+print((json.load(sys.stdin) or {}).get("piDataLoggerId") or "")
+' <<<"$config" 2>/dev/null || true)"
+
+if [[ -z "$kennung" || "$kennung" == "$WERKSVORGABE" ]]; then
+    die "Der Dienst meldet die Geraetekennung '${kennung:-leer}'.
+  Das ist die Werksvorgabe, nicht die dieses Geraetes. Entweder ist der
+  Datenlogger wirklich fabrikneu und noch nie eingerichtet worden - dann zuerst
+  die Kennung setzen -, oder seine Konfiguration ist verloren gegangen.
+
+  Dieses Script schreibt die gelesene Konfiguration zurueck, um die
+  Hardware-Variante zu ergaenzen. Es bricht hier ab, damit es einen Verlust
+  nicht festschreibt.
+
+  Letzte Sicherung ansehen:  ls -l /var/lib/ees/config/
+  Einspielen:                curl -sS -X POST http://127.0.0.1:$SERVICE_PORT/config/update \\
+                               -H 'content-type: application/json' \\
+                               --data @/var/lib/ees/config/data_logger.config"
+fi
 
 patched="$(python3 -c '
 import json, sys

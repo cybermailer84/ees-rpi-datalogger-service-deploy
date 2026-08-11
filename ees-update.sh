@@ -48,6 +48,10 @@ POSTINSTALL_TIMEOUT="${EES_POSTINSTALL_TIMEOUT:-300}"
 CONFIG_BACKUP_DIR="${EES_CONFIG_BACKUP_DIR:-/var/lib/ees/config}"
 CONFIG_BACKUP_KEEP="${EES_CONFIG_BACKUP_KEEP:-10}"
 
+# Werksvorgabe aus dtos::AppServiceConfigDto::default(). Eine Sicherung, die
+# diese Kennung traegt, ist keine - sie wuerde eine brauchbare ueberschreiben.
+WERKSVORGABE="rpi_bi_gs27_schule"
+
 UPDATE_ROOT="${EES_UPDATE_ROOT:-https://ees.itc-haas.at/update/BACKUP/services}"
 KEY_DIR="${EES_KEY_DIR:-/etc/ees/keys}"
 SERVICE_PORT="${EES_SERVICE_PORT:-8000}"
@@ -265,6 +269,13 @@ sichere_konfiguration() {
         # unvollstaendige zu ersetzen.
         log "WARNUNG: Kein vollstaendiger Konfigurationsexport moeglich (Quelle: $CONFIG_SOURCE)."
         log "  Vorhandene Sicherungen unter $CONFIG_BACKUP_DIR bleiben unveraendert."
+        return 0
+    fi
+
+    if [[ "$SENSOR_ID" == "$WERKSVORGABE" ]]; then
+        log "WARNUNG: Der Dienst meldet die Werksvorgabe als Geraetekennung."
+        log "  Das ist keine gueltige Konfiguration - es wird nichts gesichert,"
+        log "  damit eine brauchbare Sicherung erhalten bleibt."
         return 0
     fi
 
