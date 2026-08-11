@@ -427,7 +427,15 @@ if hat binary; then
     echo "    sudo HARDWARE_VERSION=${hw_nummer:-<8 oder 9>} $WORKDIR/install-update.sh"
     echo "    grep -ao '20[0-9][0-9]\.[0-9][0-9]\.[0-9][0-9]+[0-9a-f]\{7\}' \\"
     echo "        $WORKDIR/app-service | head -1        # muss eine Version zeigen"
-    echo "    sudo ${BASH_SOURCE[0]} -w ${VARIANTE:-<v1.8 oder v1.9>}"
+    # Den Wiederaufruf mit denselben Optionen nennen, mit denen dieser
+    # Lauf gestartet wurde. Fehlt hier -e, fragt der zweite Lauf nach den
+    # Zugangsdaten, obwohl sie in einer Datei bereitliegen - und wer der
+    # Anleitung folgt, haelt das fuer einen Fehler im Script.
+    wiederaufruf="sudo ${BASH_SOURCE[0]} -w ${VARIANTE:-<v1.8 oder v1.9>}"
+    [[ -n "$ENV_QUELLE"  ]] && wiederaufruf+=" -e $ENV_QUELLE"
+    [[ "$SERVICE_PORT" != 8000 ]] && wiederaufruf+=" -p $SERVICE_PORT"
+    $JA && wiederaufruf+=" -y"
+    echo "    $wiederaufruf"
     echo
     echo "  install-update.sh laedt aus dem unversionierten Verzeichnis. Liegt"
     echo "  dort ein aelterer Stand als auf diesem Geraet, waere das ein"
