@@ -153,7 +153,7 @@ plane() {
 # Feste Reihenfolge der Ausfuehrung, unabhaengig davon, in welcher Reihenfolge
 # die Maengel auffallen: ohne die Skripte gibt es kein ees-set-variant.sh, und
 # ohne die Units keinen Updater.
-REIHENFOLGE=(skripte units variante env envrechte)
+REIHENFOLGE=(skripte units binary variante env envrechte)
 
 echo "================================================================"
 echo " Befund   $(hostname -s)   $(date '+%d.%m.%Y %H:%M')"
@@ -171,9 +171,20 @@ lies_version() {
 
 echo "-- Binaries --"
 VERSION=""
+BINARY_ZU_ALT=false
 if [[ -x "$WORKDIR/app-service" ]]; then
     VERSION="$(lies_version "$WORKDIR/app-service" || true)"
-    ok "app-service" "${VERSION:-Version nicht lesbar}"
+    if [[ -n "$VERSION" ]]; then
+        ok "app-service" "$VERSION"
+    else
+        # Die Versionsableitung kam am 05.08.2026 (706a0d6), das Feld
+        # hardwareVariant zwei Tage frueher (d174223). Ein Binary ohne
+        # Versionsangabe ist also aelter als beides: Es kennt das Feld nicht,
+        # verwirft es beim Schreiben stillschweigend und liefert beim Lesen
+        # nichts zurueck. Die Variante laesst sich darauf nicht setzen.
+        BINARY_ZU_ALT=true
+        mangel "app-service" "keine Versionsangabe - Binary ist aelter als das Feld hardwareVariant"
+    fi
 else
     mangel "app-service" "fehlt unter $WORKDIR"
 fi
@@ -224,8 +235,16 @@ if [[ -n "$IST_VARIANTE" ]]; then
         && warnung "Variante abweichend" "gesetzt $IST_VARIANTE, angefordert $VARIANTE (nur mit ees-set-variant.sh -f)"
 elif [[ -n "$KENNUNG" && "$KENNUNG" != "$WERKSVORGABE" ]]; then
     mangel "Hardware-Variante" "nicht gesetzt - der Updater bricht damit ab"
-    [[ -n "$VARIANTE" ]] && plane "variante" \
-                         || warnung "Variante unbekannt" "mit -w v1.8 bzw. -w v1.9 aufrufen"
+    if $BINARY_ZU_ALT; then
+        # Erst das Binary, dann die Variante. Andersherum scheitert es an
+        # einer stillen Verwerfung: Der Dienst nimmt die Konfiguration an,
+        # behaelt das unbekannte Feld aber nicht.
+        plane "binary"
+    elif [[ -n "$VARIANTE" ]]; then
+        plane "variante"
+    else
+        warnung "Variante unbekannt" "mit -w v1.8 bzw. -w v1.9 aufrufen"
+    fi
 fi
 
 [[ -n "$HEARTBEAT" ]] && ok "Heartbeat-URL" "$HEARTBEAT" \
@@ -330,6 +349,7 @@ beschreibe() {
     case "$1" in
         skripte)   echo "  - Deploy-Skripte erneuern (Bootstrap + download_install_scripts.sh)" ;;
         units)     echo "  - systemd-Units, Schluessel und Updater einrichten (install-services.sh)" ;;
+        binary)    echo "  - Binary erneuern - VON HAND, siehe unten (install-update.sh)" ;;
         variante)  echo "  - Hardware-Variante '$VARIANTE' setzen (ees-set-variant.sh)" ;;
         env)       echo "  - $BACKUP_ENV anlegen (FTP-Zugangsdaten)" ;;
         envrechte) echo "  - Rechte von $BACKUP_ENV auf 600 root:root setzen" ;;
@@ -385,6 +405,34 @@ if hat units; then
     echo "=== systemd-Units einrichten ==="
     SERVICE_PORT="$SERVICE_PORT" bash "$WORKDIR/install-services.sh" \
         || die "install-services.sh fehlgeschlagen."
+fi
+
+if hat binary; then
+    # Bewusst nur die Anleitung, kein Aufruf: install-update.sh laedt aus dem
+    # UNVERSIONIERTEN Verzeichnis. Auf einem Geraet im Betrieb kann das einen
+    # neueren Stand durch einen aelteren ersetzen - diese Entscheidung gehoert
+    # nicht in ein Script, das "in Ordnung bringen" heisst.
+    echo
+    echo "=== Binary erneuern - das macht dieses Script NICHT ==="
+    echo
+    echo "  Das laufende Binary kennt das Feld hardwareVariant noch nicht. Es"
+    echo "  nimmt die Konfiguration zwar an, behaelt das Feld aber nicht - die"
+    echo "  Variante liesse sich also gar nicht setzen."
+    echo
+    echo "  Erneuern, dann diesen Aufruf wiederholen:"
+    echo
+    # Ohne -w ist die Nummer unbekannt - dann einen Platzhalter zeigen
+    # statt eines Befehls, der mit leerer Variablen nicht funktioniert.
+    hw_nummer="${VARIANTE:+${VARIANTE#v1.}}"
+    echo "    sudo HARDWARE_VERSION=${hw_nummer:-<8 oder 9>} $WORKDIR/install-update.sh"
+    echo "    grep -ao '20[0-9][0-9]\.[0-9][0-9]\.[0-9][0-9]+[0-9a-f]\{7\}' \\"
+    echo "        $WORKDIR/app-service | head -1        # muss eine Version zeigen"
+    echo "    sudo ${BASH_SOURCE[0]} -w ${VARIANTE:-<v1.8 oder v1.9>}"
+    echo
+    echo "  install-update.sh laedt aus dem unversionierten Verzeichnis. Liegt"
+    echo "  dort ein aelterer Stand als auf diesem Geraet, waere das ein"
+    echo "  Rueckschritt - deshalb macht dieses Script es nicht von selbst."
+    echo
 fi
 
 if hat variante; then
