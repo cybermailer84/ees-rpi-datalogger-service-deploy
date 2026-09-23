@@ -24,6 +24,7 @@ dort hinterlegten Sollstand selbst.
 | `ees-onboard.sh` | richtet ein **fabrikneues** Gerät in einem Aufruf ein |
 | `ees-doctor.sh` | nimmt den Zustand eines **laufenden** Geräts auf und ergänzt, was fehlt |
 | `ees-set-variant.sh` | trägt die Hardware-Variante nach, ohne Binaries anzufassen |
+| `ees-set-identity.sh` | gibt einem **geklonten** Gerät seine eigene Kennung (Hostname, ID, VPN) |
 | `install-services.sh` | systemd-Units, Schlüssel, Updater |
 | `install-update.sh` | Binaries von Hand aktualisieren |
 | `ees-update.sh` | automatisches Update, per Timer |
