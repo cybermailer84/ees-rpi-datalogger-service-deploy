@@ -18,7 +18,8 @@
 #   4. VPN-Zertifikat der neuen Kennung holen und einsetzen
 #   5. Klon-Kennungen erneuern: machine-id, DHCP-DUID, SSH-Hostschluessel;
 #      Konfigurationssicherungen der Vorlage beiseitelegen
-#   6. Pruefen, dass das Dashboard Softwarestand und Hardware-Variante unter
+#   6. Zeichensatz auf UTF-8 stellen, falls er es nicht ist
+#   7. Pruefen, dass das Dashboard Softwarestand und Hardware-Variante unter
 #      der neuen Kennung fuehrt
 #
 # Den Softwarestand meldet der app-service selbst: Sein Heartbeat traegt
@@ -38,7 +39,7 @@
 # Wiederholbar: Was bereits auf der neuen Kennung steht, bleibt unangetastet.
 #
 # Aufruf:  ees-set-identity.sh -k <kennung> [-w <variante>] [-u <url>]
-#                              [-p <port>] [-l] [-V] [-r] [-y] [-n]
+#                              [-p <port>] [-l] [-V] [-Z] [-r] [-y] [-n]
 #
 #   -k  Neue Kennung, z.B. rpi-de69test (rpi_de69test geht auch).
 #       Hostname wird rpi-de69test, Datenlogger-ID rpi_de69test.
@@ -47,6 +48,7 @@
 #   -p  Port des app-service   (Vorgabe: 8000)
 #   -l  Mitgebrachte Messwerte und das Fehlerprotokoll der Vorlage loeschen.
 #   -V  Kein VPN-Zertifikat holen.
+#   -Z  Zeichensatz nicht anfassen.
 #   -r  Am Ende neu starten. Noetig ist der Neustart in jedem Fall - erst
 #       danach gelten Hostname, machine-id und das neue VPN-Zertifikat.
 #   -y  Ohne Rueckfrage ausfuehren.
@@ -60,6 +62,7 @@ NEUE_URL=""
 SERVICE_PORT="${SERVICE_PORT:-8000}"
 MESSWERTE_LOESCHEN=false
 MIT_VPN=true
+MIT_ZEICHENSATZ=true
 NEUSTART=false
 JA=false
 PROBELAUF=false
@@ -82,9 +85,9 @@ WERKSVORGABE="rpi_bi_gs27_schule"
 
 APP_UNIT="ees-app-service.service"
 
-usage() { sed -n '2,54p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,56p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
-while getopts ":k:w:u:p:lVrynh" opt; do
+while getopts ":k:w:u:p:lVZrynh" opt; do
     case "$opt" in
         k) NEU_EINGABE="$OPTARG" ;;
         w) VARIANTE="$OPTARG" ;;
@@ -92,6 +95,7 @@ while getopts ":k:w:u:p:lVrynh" opt; do
         p) SERVICE_PORT="$OPTARG" ;;
         l) MESSWERTE_LOESCHEN=true ;;
         V) MIT_VPN=false ;;
+        Z) MIT_ZEICHENSATZ=false ;;
         r) NEUSTART=true ;;
         y) JA=true ;;
         n) PROBELAUF=true ;;
@@ -311,6 +315,39 @@ MARKE="$STATE_DIR/identitaet"
 KLON_ERNEUERN=true
 [[ -r "$MARKE" && "$(cat "$MARKE")" == "$NEU_ID" ]] && KLON_ERNEUERN=false
 
+# Der Zeichensatz der Anmeldesitzung. Gelesen wird die Datei, nicht die eigene
+# Umgebung: sudo reicht LANG durch, und dann stuende hier der Zeichensatz des
+# Aufrufenden statt der, den das Geraet am Bildschirm verwendet.
+#
+# LC_ALL wird mitgelesen, weil es jede andere Einstellung uebersteuert - ein
+# LANG=de_AT.UTF-8 neben LC_ALL=de_AT bleibt wirkungslos.
+LOCALE_DATEI="$ROOT/etc/default/locale"
+LOCALE_GEN="$ROOT/etc/locale.gen"
+
+lies_locale() { # variable
+    [[ -r "$LOCALE_DATEI" ]] || return 0
+    sed -n "s/^[[:space:]]*$1=\\?\"\\?\([^\"]*\)\"\\?[[:space:]]*$/\1/p" "$LOCALE_DATEI" | tail -1
+}
+
+ist_utf8() { [[ "${1,,}" == *.utf-8 || "${1,,}" == *.utf8 ]]; }
+
+LANG_IST="$(lies_locale LANG)"
+LCALL_IST="$(lies_locale LC_ALL)"
+
+# Ziel: dieselbe Sprache, nur mit Zeichensatz. Steht gar nichts oder C/POSIX
+# da, ist C.UTF-8 richtig - das gibt es auf jedem Debian ohne locale-gen.
+basis="${LANG_IST%%.*}"
+case "${basis:-C}" in
+    C|POSIX|"") LOCALE_SOLL="C.UTF-8" ;;
+    *)          LOCALE_SOLL="$basis.UTF-8" ;;
+esac
+
+ZEICHENSATZ_OK=false
+if ist_utf8 "$LANG_IST" && { [[ -z "$LCALL_IST" ]] || ist_utf8 "$LCALL_IST"; }; then
+    ZEICHENSATZ_OK=true
+fi
+$MIT_ZEICHENSATZ || ZEICHENSATZ_OK=true   # -Z: als erledigt behandeln
+
 VPN_DA=false
 for d in "$ROOT/etc/openvpn/$NEU_ID.conf" "$ROOT/etc/openvpn/$NEU_ID.ovpn"; do
     [[ -f "$d" ]] && VPN_DA=true
@@ -329,6 +366,7 @@ printf 'Datenlogger-ID     : %s -> %s\n' "$ALT_ID" "$NEU_ID"
 printf 'Hardware-Variante  : %s\n' "${SOLL_VARIANTE:-NICHT GESETZT}"
 printf 'Softwarestand      : %s\n' "${VERSION:-unbekannt}"
 printf 'Heartbeat-URL      : %s\n' "$SOLL_URL"
+printf 'Zeichensatz        : %s\n' "$(if $ZEICHENSATZ_OK; then echo "${LANG_IST:-nicht gesetzt}"; else echo "${LANG_IST:-nicht gesetzt}${LCALL_IST:+, LC_ALL=$LCALL_IST}  ->  $LOCALE_SOLL"; fi)"
 printf 'Arbeitsverzeichnis : %s  (Benutzer %s)\n' "$WORKDIR" "$GERAETE_USER"
 echo "----------------------------------------------------------------"
 
@@ -369,6 +407,7 @@ if $MIT_VPN; then
             || plan "VPN-Zertifikat $NEU_ID holen und einsetzen"
 fi
 $KLON_ERNEUERN && plan "machine-id, DHCP-DUID und SSH-Hostschluessel erneuern; Sicherungen der Vorlage beiseitelegen"
+$ZEICHENSATZ_OK || plan "Zeichensatz auf $LOCALE_SOLL stellen (erzeugen und setzen)"
 plan "Meldung im Dashboard pruefen"
 $NEUSTART && plan "Neu starten"
 
@@ -599,7 +638,73 @@ else
     echo "$NEU_ID" > "$MARKE"
 fi
 
-# --- 8. Meldung im Dashboard -------------------------------------------------
+# --- 8. Zeichensatz ----------------------------------------------------------
+
+step "Zeichensatz"
+
+if $ZEICHENSATZ_OK; then
+    $MIT_ZEICHENSATZ && log "Steht auf ${LANG_IST:-nicht gesetzt} - nichts zu tun." \
+                     || log "Uebersprungen (-Z)."
+else
+    # Warum das hier steht: Ohne UTF-8 zeichnet die app-tui am angesteckten
+    # Bildschirm Kaestchen und "â" statt Rahmen - sie malt Unicode-Striche
+    # (U+2500 ff.), und ein Terminal ohne UTF-8 liest die drei Bytes einzeln
+    # als Latin-1. Ueber SSH faellt es nicht auf: Dort gilt der Zeichensatz
+    # des Clients, den der Client mitschickt.
+    cp -p "$LOCALE_DATEI" "$ABLAGE/locale" 2>/dev/null || true
+    cp -p "$LOCALE_GEN" "$ABLAGE/locale.gen" 2>/dev/null || true
+
+    # C.UTF-8 gibt es immer; jedes andere Gebietsschema muss erst erzeugt
+    # werden, und erzeugt wird nur, was in /etc/locale.gen unkommentiert steht.
+    if [[ "$LOCALE_SOLL" != "C.UTF-8" && -f "$LOCALE_GEN" ]]; then
+        if grep -qE "^[[:space:]]*#[[:space:]]*$LOCALE_SOLL[[:space:]]+UTF-8" "$LOCALE_GEN"; then
+            sed -i -E "s/^[[:space:]]*#[[:space:]]*($LOCALE_SOLL[[:space:]]+UTF-8)/\1/" "$LOCALE_GEN"
+            log "  $LOCALE_SOLL in $(basename "$LOCALE_GEN") freigeschaltet"
+        elif ! grep -qE "^[[:space:]]*$LOCALE_SOLL[[:space:]]+UTF-8" "$LOCALE_GEN"; then
+            echo "$LOCALE_SOLL UTF-8" >> "$LOCALE_GEN"
+            log "  $LOCALE_SOLL in $(basename "$LOCALE_GEN") ergaenzt"
+        fi
+        locale-gen >/dev/null 2>&1 || true
+
+        # Gegenprobe: Ein Tippfehler im Gebietsschema faellt sonst erst am
+        # Bildschirm auf - und bis dahin steht ein LANG da, das es nicht gibt.
+        if ! locale -a 2>/dev/null | tr 'A-Z' 'a-z' | grep -qx "$(tr 'A-Z' 'a-z' <<<"${LOCALE_SOLL/.UTF-8/.utf8}")"; then
+            log "  $LOCALE_SOLL liess sich nicht erzeugen - weiche auf C.UTF-8 aus."
+            LOCALE_SOLL="C.UTF-8"
+        fi
+    fi
+
+    # LC_ALL wird geleert, nicht mitgesetzt: Es uebersteuert jede einzelne
+    # Kategorie, und genau daran scheitert sonst das neue LANG.
+    update-locale LANG="$LOCALE_SOLL" LC_ALL= >/dev/null 2>&1 || true
+
+    # Nicht auf update-locale verlassen - bei alten Fassungen bleibt die
+    # LC_ALL-Zeile stehen, und dann war alles umsonst.
+    if [[ -f "$LOCALE_DATEI" ]]; then
+        sed -i -E '/^[[:space:]]*LC_ALL=/d' "$LOCALE_DATEI"
+        grep -qE "^[[:space:]]*LANG=" "$LOCALE_DATEI" \
+            || echo "LANG=$LOCALE_SOLL" >> "$LOCALE_DATEI"
+        sed -i -E "s|^[[:space:]]*LANG=.*|LANG=$LOCALE_SOLL|" "$LOCALE_DATEI"
+    else
+        echo "LANG=$LOCALE_SOLL" > "$LOCALE_DATEI"
+    fi
+
+    log "Zeichensatz steht auf $LOCALE_SOLL (gilt ab der naechsten Anmeldung)."
+
+    # Eine eigene Zeile in den Profildateien uebersteuert die Systemeinstellung
+    # wieder. Nur melden, nicht aendern: Was jemand dort von Hand eingetragen
+    # hat, gehoert ihm.
+    GERAETE_HOME="$(getent passwd "$GERAETE_USER" | cut -d: -f6 || true)"
+    eigene="$(grep -lE '^[[:space:]]*(export[[:space:]]+)?(LC_ALL|LANG)=' \
+        ${GERAETE_HOME:+"$GERAETE_HOME/.bashrc" "$GERAETE_HOME/.profile"} \
+        "$ROOT/etc/environment" 2>/dev/null || true)"
+    if [[ -n "$eigene" ]]; then
+        echo "  ACHTUNG: LANG oder LC_ALL steht auch hier und uebersteuert die Systemeinstellung:"
+        sed 's/^/    /' <<<"$eigene"
+    fi
+fi
+
+# --- 9. Meldung im Dashboard -------------------------------------------------
 
 step "Meldung im Dashboard"
 
